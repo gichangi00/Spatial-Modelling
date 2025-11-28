@@ -1,0 +1,248 @@
+---
+title: "Spatial modelling"
+author: "Collins Gichangi"
+date: "2025-11-27"
+output: html_document
+---
+
+```{r}
+# Load necessary library for data manipulation
+library(dplyr)
+
+# 1. Constructing the Dataset
+# We are creating a dataset for 47 counties based on typical Kenya TB trends
+# High burden: Nairobi, Mombasa, Turkana, Marsabit (Pastoral/Urban)
+# Covariates: Population Density (People/sq km), Poverty Rate (%)
+
+tb_data <- data.frame(
+  County = c("Mombasa", "Kwale", "Kilifi", "Tana River", "Lamu", "Taita Taveta", 
+             "Garissa", "Wajir", "Mandera", "Marsabit", "Isiolo", "Meru", 
+             "Tharaka-Nithi", "Embu", "Kitui", "Machakos", "Makueni", "Nyandarua", 
+             "Nyeri", "Kirinyaga", "Murang'a", "Kiambu", "Turkana", "West Pokot", 
+             "Samburu", "Trans Nzoia", "Uasin Gishu", "Elgeyo-Marakwet", "Nandi", 
+             "Baringo", "Laikipia", "Nakuru", "Narok", "Kajiado", "Kericho", 
+             "Bomet", "Kakamega", "Vihiga", "Bungoma", "Busia", "Siaya", 
+             "Kisumu", "Homa Bay", "Migori", "Kisii", "Nyamira", "Nairobi"),
+  
+  # Realistic Incidence rates (approx cases per 100k) based on NLTP trends
+  TB_Incidence = c(450, 210, 230, 180, 200, 240, 
+                   280, 260, 250, 480, 420, 310, 
+                   190, 200, 220, 290, 210, 150, 
+                   160, 180, 190, 320, 550, 380, 
+                   400, 280, 300, 220, 240, 310, 
+                   260, 340, 270, 290, 230, 210, 
+                   260, 240, 250, 290, 380, 410, 
+                   400, 350, 220, 210, 520),
+  
+  # Approximate Population Density (2019 Census proxy)
+  Pop_Density = c(5500, 124, 116, 8, 23, 20, 
+                  18, 14, 33, 6, 11, 224, 
+                  150, 215, 37, 235, 121, 196, 
+                  228, 411, 417, 952, 14, 73, 
+                  15, 380, 343, 150, 312, 60, 
+                  55, 290, 65, 51, 370, 350, 
+                  618, 1047, 450, 527, 393, 550, 
+                  360, 430, 875, 675, 6247),
+  
+  # Approximate Poverty Rate (Integrated Household Budget Survey proxy)
+  Poverty_Rate = c(27, 41, 46, 62, 28, 32, 
+                   65, 62, 77, 63, 51, 19, 
+                   28, 28, 47, 29, 34, 34, 
+                   19, 20, 20, 23, 79, 69, 
+                   75, 41, 37, 43, 40, 42, 
+                   36, 29, 33, 38, 34, 32, 
+                   34, 41, 35, 69, 33, 39, 
+                   33, 41, 44, 32, 16)
+)
+
+# Preview the data
+head(tb_data)
+
+```
+
+
+
+```{r}
+# Summary statistics
+summary(tb_data)
+
+# Check distribution of the target variable (TB Incidence)
+hist(tb_data$TB_Incidence, 
+     main = "Histogram of TB Incidence", 
+     xlab = "Incidence per 100k", 
+     col = "skyblue", 
+     border = "white")
+```
+## Installing and loading the spacial packages
+```{r}
+# Install packages if you haven't already
+if(!require(sf)) install.packages("sf")
+if(!require(geodata)) install.packages("geodata")
+if(!require(tmap)) install.packages("tmap") # for setting up the maps
+
+library(sf)
+library(geodata)
+library(tmap)
+```
+
+
+```{r}
+# 1. Download Kenya Shapefile
+# This saves the map data to a temporary folder
+ken_shape <- geodata::gadm(country = "KEN", level = 1, path = tempdir())
+
+# 2. Convert to Simple Features (sf) object for easier handling
+ken_sf <- st_as_sf(ken_shape)
+
+# 3. 
+# We create a new column 'County' in the map data to match your 'tb_data'
+ken_sf$County <- ken_sf$NAME_1
+
+# 4. Merge the data
+# We merge the map (ken_sf) with your data (tb_data) using the 'County' column
+map_data <- merge(ken_sf, tb_data, by = "County")
+
+# 5. Check if the merge was successful
+print(paste("Number of mapped counties:", nrow(map_data)))
+```
+```{r}
+# Task 2a: Produce a choropleth map of incidence
+library(tmap)
+
+# Set tmap mode to "plot" for static maps (use "view" for interactive)
+tmap_mode("plot")
+
+# Create the map
+tb_map <- tm_shape(map_data) +
+  tm_polygons("TB_Incidence", 
+              style = "jenks",    # Natural breaks classification
+              palette = "OrRd",   # Orange-Red color palette
+              title = "TB Incidence per 100k") +
+  tm_compass(position = c("right", "top")) +
+  tm_scale_bar(position = c("left", "bottom")) +
+  tm_layout(main.title = "Spatial Distribution of TB Incidence in Kenya",
+            legend.outside = TRUE)
+
+# Display the map
+print(tb_map)
+```
+
+```{r}
+# Load spatial statistics library
+if(!require(spdep)) install.packages("spdep")
+library(spdep)
+
+# 1. Create Neighbor List
+# This identifies which counties share a border
+nb <- poly2nb(map_data)
+
+# 2. Create Spatial Weights Matrix
+# This standardizes the connections so we can do math on them
+listw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+
+# 3. Compute Global Moran's I
+moran_result <- moran.test(map_data$TB_Incidence, listw, zero.policy = TRUE)
+
+# Print the result
+print(moran_result)
+```
+```{r}
+# Task 2c & 2d: Generate LISA Cluster Map
+
+# 1. Calculate Local Moran's I for every single county
+local_moran <- localmoran(map_data$TB_Incidence, listw)
+
+# 2. Bind the results back to our map data
+map_data$local_p <- local_moran[, 5] # The p-value column
+map_data$s_incidence <- scale(map_data$TB_Incidence) # Standardize data
+map_data$lag_incidence <- lag.listw(listw, map_data$s_incidence)
+```
+
+```{r}
+# 3. Create a Categorical Variable for the Clusters
+# We use a threshold of p < 0.05 for significance
+map_data$quadrant <- "Not Significant"
+
+# Identify High-High (Hotspots)
+map_data$quadrant[map_data$s_incidence > 0 & 
+                  map_data$lag_incidence > 0 & 
+                  map_data$local_p <= 0.05] <- "High-High"
+
+# Identify Low-Low (Coldspots)
+map_data$quadrant[map_data$s_incidence < 0 & 
+                  map_data$lag_incidence < 0 & 
+                  map_data$local_p <= 0.05] <- "Low-Low"
+
+# Identify High-Low (Outliers)
+map_data$quadrant[map_data$s_incidence > 0 & 
+                  map_data$lag_incidence < 0 & 
+                  map_data$local_p <= 0.05] <- "High-Low"
+
+# Identify Low-High (Outliers)
+map_data$quadrant[map_data$s_incidence < 0 & 
+                  map_data$lag_incidence > 0 & 
+                  map_data$local_p <= 0.05] <- "Low-High"
+```
+
+
+```{r}
+# 4. Plot the LISA Map
+lisa_map <- tm_shape(map_data) +
+  tm_polygons("quadrant", 
+              title = "LISA Clusters (TB)",
+              palette = c("High-High" = "red", 
+                          "Low-Low" = "blue", 
+                          "High-Low" = "pink", 
+                          "Low-High" = "lightblue", 
+                          "Not Significant" = "white"),
+              border.col = "gray50") +
+  tm_layout(main.title = "LISA Cluster Map for TB Incidence",
+            legend.outside = TRUE)
+
+print(lisa_map)
+```
+```{r}
+# Check how many counties fall into each category
+table(map_data$quadrant)
+```
+```{r}
+# Task 3a: Fit Non-Spatial Regression (OLS)
+# We are predicting TB_Incidence using Poverty_Rate and Population Density
+# We use log(Pop_Density) because density is very skewed (Nairobi is huge)
+
+ols_model <- lm(TB_Incidence ~ Poverty_Rate + log(Pop_Density), data = map_data)
+
+# View the results
+summary(ols_model)
+```
+```{r}
+# Task 3b: Moran's I test on OLS Residuals
+# This tells us if the ols model missed any spatial pattern
+
+lm.morantest(ols_model, listw)
+```
+```{r}
+# installing the necessary package
+install.packages("spatialreg")
+library(spatialreg)
+
+# 1. Fit the Spatial Lag Model (SLM)
+slm_model <- lagsarlm(TB_Incidence ~ Poverty_Rate + log(Pop_Density), 
+                      data = map_data, 
+                      listw = listw)
+
+# 2. Fit the Spatial Error Model (SEM)
+sem_model <- errorsarlm(TB_Incidence ~ Poverty_Rate + log(Pop_Density), 
+                        data = map_data, 
+                        listw = listw)
+
+# 3. Compare AIC values
+cat("AIC Comparison:\n")
+cat("OLS AIC:", AIC(ols_model), "\n")
+cat("SLM AIC:", AIC(slm_model), "\n")
+cat("SEM AIC:", AIC(sem_model), "\n")
+```
+```{r}
+# Get the detailed summary of the winning model (SEM)
+summary(sem_model)
+```
